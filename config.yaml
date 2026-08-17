@@ -1,0 +1,63 @@
+# Local AI Voice Studio Configuration
+# =====================================
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+
+tts:
+  default_language: en
+  default_format: wav
+  max_text_length: 5000
+  default_speed: 1.0
+  default_volume: 1.0
+
+hardware:
+  auto_detect: true
+  force_device: null  # null = auto, "cuda", "cpu"
+
+models:
+  auto_download: true
+  auto_select: true
+  cache_dir: models
+  # VRAM thresholds for model selection (in GB)
+  thresholds:
+    large_model_min_vram: 8
+    medium_model_min_vram: 4
+    small_model_min_vram: 2
+    cpu_model_min_ram: 8
+
+audio:
+  sample_rate: 22050
+  output_dir: outputs
+  supported_formats:
+    - wav
+    - mp3
+
+voices:
+  storage_dir: voices
+  max_upload_size_mb: 50
+  supported_formats:
+    - .wav
+    - .mp3
+    - .m4a
+    - .flac
+  validation:
+    min_duration: 3.0
+    max_duration: 300.0
+    min_sample_rate: 16000
+
+logging:
+  level: INFO
+  # Security: never log raw voice data or embeddings
+  safe_fields:
+    - job_id
+    - timestamp
+    - model
+    - language
+    - duration
+    - status
+    - error

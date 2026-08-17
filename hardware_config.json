@@ -1,0 +1,12 @@
+{
+  "cpu": "Intel64 Family 6 Model 151 Stepping 5, GenuineIntel",
+  "ram_gb": 31.8,
+  "gpu_name": "NVIDIA GeForce RTX 3060 Ti",
+  "vram_gb": 8.0,
+  "nvidia_driver": "610.88",
+  "cuda_compute_capability": "8.6",
+  "backend": "cuda",
+  "torch_version": "2.6.0+cu124",
+  "torchaudio_version": "2.6.0+cu124",
+  "torch_index_url": "https://download.pytorch.org/whl/cu124"
+}
