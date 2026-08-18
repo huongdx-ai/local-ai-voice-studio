@@ -88,9 +88,10 @@ def main():
 
             props = torch.cuda.get_device_properties(0)
 
+            total_mem = getattr(props, "total_memory", getattr(props, "total_mem", 0))
             print(
                 f"VRAM Total:     "
-                f"{props.total_memory / (1024 ** 3):.1f} GB"
+                f"{total_mem / (1024 ** 3):.1f} GB"
             )
 
             capability = torch.cuda.get_device_capability(0)

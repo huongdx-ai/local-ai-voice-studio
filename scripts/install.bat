@@ -1,7 +1,5 @@
 @echo off
-setlocal EnableExtensions
 title Local AI Voice Studio - Installer
-
 echo ============================================================
 echo   Local AI Voice Studio - Installation
 echo ============================================================
@@ -9,214 +7,126 @@ echo.
 
 cd /d "%~dp0\.."
 
-:: ============================================================
-:: [1/7] Check Python
-:: ============================================================
+:: Check for Python (prefer Python 3.11/3.10 via py launcher)
+echo [1/7] Checking Python version (Python 3.10 or 3.11 required)...
+set "PY_CMD="
 
-echo [1/7] Checking Python...
+py -3.11 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PY_CMD=py -3.11"
+    goto :py_found
+)
+
+py -3.10 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PY_CMD=py -3.10"
+    goto :py_found
+)
 
 python --version >nul 2>&1
-
-if errorlevel 1 (
-    echo ERROR: Python not found.
-    echo Please install Python 3.10+ from:
-    echo https://www.python.org/downloads/
-    echo.
-    pause
-    exit /b 1
+if not errorlevel 1 (
+    set "PY_CMD=python"
+    goto :py_found
 )
 
-for /f "tokens=2" %%a in ('python --version 2^>^&1') do set PYVER=%%a
+echo ERROR: Python 3.10+ not found.
+echo Please install Python 3.11 from https://www.python.org/downloads/
+echo Make sure to check "Add Python to PATH" and install the Python Launcher (py).
+pause
+exit /b 1
 
-echo Found Python %PYVER%
-echo.
+:py_found
+for /f "tokens=2" %%a in ('%PY_CMD% --version 2^>^&1') do set PYVER=%%a
+echo Found Python %PYVER% (using %PY_CMD%)
 
-:: ============================================================
-:: [2/7] Check Node.js
-:: ============================================================
-
+:: Check Node.js
 echo [2/7] Checking Node.js...
-
 node --version >nul 2>&1
-
 if errorlevel 1 (
     echo ERROR: Node.js not found.
-    echo Please install Node.js 18+ from:
-    echo https://nodejs.org/
-    echo.
+    echo Please install Node.js 18+ from https://nodejs.org/
     pause
     exit /b 1
 )
-
 for /f "tokens=1" %%a in ('node --version 2^>^&1') do set NODEVER=%%a
-
 echo Found Node.js %NODEVER%
+
+:: Create Python virtual environment
 echo.
-
-:: ============================================================
-:: [3/7] Create virtual environment
-:: ============================================================
-
-echo [3/7] Creating Python virtual environment...
-
+echo [3/7] Creating Python virtual environment with %PY_CMD%...
 if not exist venv (
-    python -m venv venv
-
-    if errorlevel 1 (
-        echo ERROR: Failed to create virtual environment.
-        pause
-        exit /b 1
-    )
-
+    %PY_CMD% -m venv venv
     echo Virtual environment created.
 ) else (
     echo Virtual environment already exists.
 )
 
-echo.
-
+:: Activate venv and upgrade pip
 call venv\Scripts\activate.bat
-
-if errorlevel 1 (
-    echo ERROR: Failed to activate virtual environment.
-    pause
-    exit /b 1
-)
-
-:: ============================================================
-:: Upgrade pip
-:: ============================================================
-
 echo Upgrading pip...
-
 python -m pip install --upgrade pip
 
+:: Detect GPU and install PyTorch
+echo.
+echo [4/7] Detecting GPU and installing PyTorch...
+nvidia-smi >nul 2>&1
 if errorlevel 1 (
-    echo WARNING: pip upgrade failed.
-)
-
-echo.
-
-:: ============================================================
-:: [4/7] Detect hardware
-:: ============================================================
-
-echo [4/7] Detecting CPU / GPU / CUDA hardware...
-echo.
-
-venv\Scripts\python.exe scripts\detect_hardware.py
-
-if errorlevel 1 (
-    echo.
-    echo ERROR: Hardware detection failed.
-    pause
-    exit /b 1
-)
-
-echo.
-
-:: ============================================================
-:: Read generated hardware config
-:: ============================================================
-
-if not exist hardware_config.json (
-    echo ERROR: hardware_config.json was not generated.
-    pause
-    exit /b 1
-)
-
-:: ============================================================
-:: [5/7] Install backend dependencies
-:: ============================================================
-
-echo [5/7] Installing backend dependencies...
-echo.
-
-python -m pip install -r backend\requirements.txt
-
-if errorlevel 1 (
-    echo.
-    echo ERROR: Backend dependency installation failed.
-    echo.
-    pause
-    exit /b 1
-)
-
-echo.
-echo Backend dependencies installed successfully.
-echo.
-
-:: ============================================================
-:: Verify PyTorch
-:: ============================================================
-
-echo ============================================================
-echo   Verifying PyTorch / CUDA
-echo ============================================================
-echo.
-
-venv\Scripts\python.exe -c "import torch; print('PyTorch:', torch.__version__); print('CUDA Build:', torch.version.cuda); print('CUDA Available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'); print('VRAM:', round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2), 'GB' if torch.cuda.is_available() else 'N/A')" 
-
-echo.
-
-:: ============================================================
-:: [6/7] Install frontend
-:: ============================================================
-
-echo [6/7] Installing frontend dependencies...
-echo.
-
-if exist frontend (
-    cd frontend
-
-    call npm install
-
-    if errorlevel 1 (
-        echo WARNING: Frontend npm install failed.
-    )
-
-    cd ..
+    echo No NVIDIA GPU detected. Installing CPU-only PyTorch...
+    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 ) else (
-    echo WARNING: frontend directory not found.
+    echo NVIDIA GPU detected. Installing CUDA PyTorch...
+    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    if errorlevel 1 (
+        echo CUDA install failed. Falling back to CPU PyTorch...
+        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+    )
 )
 
+:: Install OmniVoice and other dependencies
 echo.
+echo [5/7] Installing OmniVoice and backend dependencies...
+pip install -r backend\requirements.txt
+if errorlevel 1 (
+    echo WARNING: Some dependencies may have failed.
+    echo Please check the output above.
+)
 
-:: ============================================================
-:: [7/7] Create directories
-:: ============================================================
+:: Install frontend dependencies
+echo.
+echo [6/7] Installing frontend dependencies...
+cd frontend
+call npm install
+cd ..
 
+:: Create directories
+echo.
 echo [7/7] Creating project directories...
-
 if not exist models mkdir models
 if not exist voices mkdir voices
 if not exist outputs mkdir outputs
 if not exist data mkdir data
 
-echo Directories ready.
+:: Final check
 echo.
-
-:: ============================================================
-:: Final system check
-:: ============================================================
-
-echo ============================================================
-echo   FINAL SYSTEM STATUS
-echo ============================================================
-echo.
-
-venv\Scripts\python.exe scripts\check_gpu.py
-
-echo.
-
 echo ============================================================
 echo   Installation Complete!
 echo ============================================================
 echo.
 
-echo Run:
-echo   scripts\run.bat
-echo.
+python -c "import torch; cuda=torch.cuda.is_available(); print(f'  CUDA: {\"Available\" if cuda else \"Not available\"}')" 2>nul
+if errorlevel 1 (
+    echo   CUDA: Not available
+    echo   Using CPU mode.
+) else (
+    python -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}') if torch.cuda.is_available() else None" 2>nul
+)
 
+python -c "import omnivoice; print('  OmniVoice: Installed')" 2>nul
+if errorlevel 1 (
+    echo   OmniVoice: NOT INSTALLED - run: pip install omnivoice
+) 
+
+echo.
+echo Run 'scripts\run.bat' to start the application.
+echo.
 pause
-endlocal

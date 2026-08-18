@@ -1,12 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Box, Download, Trash2, CheckCircle2, Zap, HardDrive } from 'lucide-react';
+import { Download, Trash2, CheckCircle2, Zap, HardDrive, Globe } from 'lucide-react';
 import { getModels, downloadModel, deleteModel, activateModel } from '../services/api';
 import ProgressBar from '../components/ProgressBar';
 import type { ModelInfo, DownloadProgress } from '../types';
-
-const LANG_NAMES: Record<string, string> = {
-  en: 'English', vi: 'Vietnamese', ja: 'Japanese', multi: 'Multilingual',
-};
 
 export default function Models() {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -62,16 +58,6 @@ export default function Models() {
     } catch {}
   }
 
-  // Group models by language
-  const groups: Record<string, ModelInfo[]> = {};
-  models.forEach((m) => {
-    const key = m.language === 'multi' ? 'multi' : m.language;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(m);
-  });
-
-  const groupOrder = ['multi', 'en', 'vi', 'ja'];
-
   return (
     <div className="animate-in">
       <div className="page-header">
@@ -84,94 +70,121 @@ export default function Models() {
           <div className="spinner" /> Loading models...
         </div>
       ) : (
-        groupOrder
-          .filter((g) => groups[g])
-          .map((groupKey) => (
-            <div key={groupKey} style={{ marginBottom: 32 }}>
-              <h2 style={{
-                fontSize: 16, fontWeight: 600, color: 'var(--text-secondary)',
-                marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid var(--border)',
-              }}>
-                {LANG_NAMES[groupKey] || groupKey}
-              </h2>
-              <div className="card-grid">
-                {groups[groupKey].map((model) => (
-                  <div key={model.id} className="card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{model.name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {model.engine.toUpperCase()} Engine
-                        </div>
-                      </div>
-                      {model.status === 'installed' ? (
-                        <span className="badge badge-success"><CheckCircle2 size={12} style={{ marginRight: 4 }} /> Installed</span>
-                      ) : model.status === 'downloading' ? (
-                        <span className="badge badge-info animate-pulse">Downloading</span>
-                      ) : (
-                        <span className="badge badge-warning">Not Installed</span>
-                      )}
-                    </div>
+        <div className="card-grid">
+          {models.map((model) => (
+            <div key={model.id} className="card" style={{ position: 'relative', overflow: 'hidden' }}>
+              {/* Gradient accent bar */}
+              <div style={{
+                position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                background: 'var(--accent-gradient)',
+              }} />
 
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
-                      {model.description}
-                    </p>
-
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                      <div><HardDrive size={12} style={{ marginRight: 4 }} />{model.size_gb} GB</div>
-                      <div>{model.cpu_supported ? '✓ CPU' : '✗ CPU'} / {model.cuda_supported ? '✓ GPU' : '✗ GPU'}</div>
-                      <div>Quality: {'★'.repeat(Math.round(model.quality_score / 2))}</div>
-                      <div>Speed: {'★'.repeat(Math.round(model.speed_score / 2))}</div>
-                      {model.voice_cloning && (
-                        <div style={{ gridColumn: 'span 2' }}>
-                          <span className="badge badge-purple" style={{ fontSize: 10 }}>
-                            <Zap size={10} style={{ marginRight: 2 }} /> Voice Cloning
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Download progress */}
-                    {downloading[model.id] && (
-                      <div style={{ marginBottom: 12 }}>
-                        <ProgressBar
-                          progress={downloading[model.id].progress}
-                          message={downloading[model.id].message}
-                        />
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      {model.status === 'installed' ? (
-                        <>
-                          <button
-                            className={`btn btn-sm ${model.is_active ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => handleActivate(model.id)}
-                            style={{ flex: 1 }}
-                          >
-                            {model.is_active ? '✓ Active' : 'Use'}
-                          </button>
-                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(model.id)}>
-                            <Trash2 size={14} />
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          className="btn btn-primary btn-sm"
-                          style={{ flex: 1 }}
-                          onClick={() => handleDownload(model.id)}
-                          disabled={!!downloading[model.id]}
-                        >
-                          <Download size={14} /> Download
-                        </button>
-                      )}
-                    </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, marginTop: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Globe size={20} color="var(--accent-secondary)" />
+                    {model.name}
                   </div>
-                ))}
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    {model.engine.toUpperCase()} Engine • k2-fsa
+                  </div>
+                </div>
+                {model.status === 'installed' ? (
+                  <span className="badge badge-success"><CheckCircle2 size={12} style={{ marginRight: 4 }} /> Installed</span>
+                ) : model.status === 'downloading' ? (
+                  <span className="badge badge-info animate-pulse">Downloading</span>
+                ) : (
+                  <span className="badge badge-warning">Not Installed</span>
+                )}
+              </div>
+
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
+                {model.description}
+              </p>
+
+              {/* Feature badges */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+                <span className="badge badge-purple" style={{ fontSize: 11 }}>
+                  <Globe size={10} style={{ marginRight: 3 }} /> 600+ Languages
+                </span>
+                <span className="badge badge-purple" style={{ fontSize: 11 }}>
+                  <Zap size={10} style={{ marginRight: 3 }} /> Voice Cloning
+                </span>
+                <span className="badge badge-info" style={{ fontSize: 11 }}>
+                  EN • VI • JA
+                </span>
+                {model.cpu_supported && (
+                  <span className="badge badge-success" style={{ fontSize: 11 }}>✓ CPU</span>
+                )}
+                {model.cuda_supported && (
+                  <span className="badge badge-success" style={{ fontSize: 11 }}>✓ GPU</span>
+                )}
+              </div>
+
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <HardDrive size={12} /> ~{model.size_gb} GB
+                </div>
+                <div>
+                  Quality: {'★'.repeat(Math.min(5, Math.round(model.quality_score / 2)))}
+                </div>
+                <div>Min VRAM: {model.min_vram_gb} GB</div>
+                <div>
+                  Speed: {'★'.repeat(Math.min(5, Math.round(model.speed_score / 2)))}
+                </div>
+              </div>
+
+              {/* Download progress */}
+              {downloading[model.id] && (
+                <div style={{ marginBottom: 12 }}>
+                  <ProgressBar
+                    progress={downloading[model.id].progress}
+                    message={downloading[model.id].message}
+                  />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                {model.status === 'installed' ? (
+                  <>
+                    <button
+                      className={`btn btn-sm ${model.is_active ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => handleActivate(model.id)}
+                      style={{ flex: 1 }}
+                    >
+                      {model.is_active ? '✓ Active' : 'Use'}
+                    </button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDelete(model.id)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    style={{ flex: 1 }}
+                    onClick={() => handleDownload(model.id)}
+                    disabled={!!downloading[model.id]}
+                  >
+                    <Download size={14} /> Install OmniVoice
+                  </button>
+                )}
               </div>
             </div>
-          ))
+          ))}
+        </div>
       )}
+
+      {/* Info card */}
+      <div className="card" style={{ marginTop: 24 }}>
+        <h3 className="card-title" style={{ marginBottom: 12 }}>About OmniVoice</h3>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+          <strong>OmniVoice</strong> by <a href="https://huggingface.co/k2-fsa/OmniVoice" target="_blank" style={{ color: 'var(--accent-secondary)' }}>k2-fsa</a> is
+          a massively multilingual zero-shot TTS model supporting <strong>600+ languages</strong> including
+          English, Vietnamese, Japanese, Chinese, Korean, French, German, and many more.
+          It uses Diffusion Language Models for high-quality synthesis with an RTF as low as 0.025 (40x faster than real-time).
+          Features include zero-shot voice cloning from 3-10 second audio samples and voice design via natural language descriptions.
+        </p>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 """
 Abstract TTS Provider for Local AI Voice Studio.
-All TTS engines must implement this interface.
+All TTS engines implement this interface.
 """
 
 from abc import ABC, abstractmethod
@@ -15,12 +15,19 @@ class TTSRequest:
     text: str
     language: str = "en"
     speed: float = 1.0
-    pitch: float = 0.0       # semitones, 0 = no change
-    volume: float = 1.0      # 0.0 - 1.0
+    pitch: float = 0.0                      # semitones, 0 = no change
+    volume: float = 1.0                     # 0.0 - 1.0
     speaker_id: Optional[str] = None
-    voice_profile_path: Optional[Path] = None  # path to voice sample for cloning
+    voice_profile_path: Optional[Path] = None       # path to reference audio (.wav)
+    voice_prompt_path: Optional[Path] = None        # path to pre-extracted prompt (.pt)
+    ref_text: Optional[str] = None                  # transcript of reference audio
+    instruct: Optional[str] = None                  # Voice design prompt (e.g. "warm calm female voice")
+    num_step: int = 32                              # Diffusion steps (16-64)
+    guidance_scale: float = 2.0                     # Classifier-free guidance scale
+    denoise: bool = True                            # Enable post-denoising
+    duration: Optional[float] = None                # Target audio duration in seconds
     output_format: str = "wav"
-    sample_rate: int = 22050
+    sample_rate: int = 24000
 
 
 @dataclass
@@ -28,7 +35,7 @@ class TTSResult:
     """Result from speech generation."""
     audio_path: Path
     duration_seconds: float = 0.0
-    sample_rate: int = 22050
+    sample_rate: int = 24000
     model_used: str = ""
     language: str = ""
     success: bool = True
@@ -39,21 +46,21 @@ class TTSResult:
 class ProviderCapabilities:
     """Declares what a provider can and cannot do."""
     languages: list[str] = field(default_factory=list)
-    voice_cloning: bool = False
+    voice_cloning: bool = True
+    voice_design: bool = True
     speed_control: bool = True
-    pitch_control: bool = False  # via model; post-processing always available
+    pitch_control: bool = False
     streaming: bool = False
     max_text_length: int = 5000
     supported_sample_rates: list[int] = field(
-        default_factory=lambda: [22050, 44100]
+        default_factory=lambda: [24000]
     )
 
 
 class TTSProvider(ABC):
     """
     Abstract base class for TTS providers.
-    Each engine (Chatterbox, Kokoro, Piper) implements this interface.
-    The TTS service uses this abstraction — never calls engines directly.
+    The OmniVoice provider implements this interface.
     """
 
     @abstractmethod
@@ -63,7 +70,7 @@ class TTSProvider(ABC):
 
     @abstractmethod
     def get_engine_id(self) -> str:
-        """Return the engine identifier (e.g., 'chatterbox', 'kokoro')."""
+        """Return the engine identifier (e.g., 'omnivoice')."""
         ...
 
     @abstractmethod
@@ -73,19 +80,12 @@ class TTSProvider(ABC):
 
     @abstractmethod
     async def initialize(self, device: str = "cpu") -> None:
-        """
-        Initialize / load the model.
-        Called once before first generation.
-        device: "cpu" or "cuda"
-        """
+        """Initialize / load the model."""
         ...
 
     @abstractmethod
     async def generate(self, request: TTSRequest) -> TTSResult:
-        """
-        Generate speech from text.
-        Returns a TTSResult with the path to the generated audio.
-        """
+        """Generate speech from text."""
         ...
 
     @abstractmethod
@@ -100,7 +100,7 @@ class TTSProvider(ABC):
 
     def supports_language(self, language: str) -> bool:
         """Check if this provider supports a given language."""
-        return language in self.get_capabilities().languages
+        return language in self.get_capabilities().languages or True
 
     def supports_cloning(self) -> bool:
         """Check if this provider supports voice cloning."""

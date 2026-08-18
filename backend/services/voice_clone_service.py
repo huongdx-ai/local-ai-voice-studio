@@ -1,8 +1,10 @@
 """
 Voice Clone Service for Local AI Voice Studio.
-Handles voice sample upload, validation, embedding extraction, and profile management.
+Handles voice sample upload, universal format conversion (WAV, MP3, M4A, AAC, FLAC, OGG, WebM, WMA),
+audio quality validation, VoiceClonePrompt extraction, and profile management.
 """
 
+import gc
 import json
 import uuid
 import shutil
@@ -12,6 +14,9 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
 
+import numpy as np
+import soundfile as sf
+
 from backend.config import get_config, get_project_root
 from backend.services.audio_validator import AudioValidator, AudioAnalysis
 
@@ -20,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VoiceProfile:
-    """A saved voice profile for cloning."""
+    """A saved voice profile for zero-shot cloning."""
     id: str
     name: str
     language: str
@@ -30,6 +35,8 @@ class VoiceProfile:
     quality_score: float
     created_at: str
     file_format: str = "wav"
+    has_prompt: bool = False
+    ref_text: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -37,8 +44,8 @@ class VoiceProfile:
 
 class VoiceCloneService:
     """
-    Manages voice profiles for voice cloning.
-    Handles upload, validation, conversion, and CRUD.
+    Manages voice profiles for voice cloning with OmniVoice.
+    Handles upload, universal decoding to 24kHz mono WAV, prompt extraction, and CRUD.
     """
 
     def __init__(self):
@@ -46,9 +53,9 @@ class VoiceCloneService:
         self._voices_dir = get_project_root() / self._config.voices.storage_dir
         self._voices_dir.mkdir(parents=True, exist_ok=True)
         self._validator = AudioValidator(
-            min_duration=self._config.voices.validation.min_duration,
-            max_duration=self._config.voices.validation.max_duration,
-            min_sample_rate=self._config.voices.validation.min_sample_rate,
+            min_duration=1.0,
+            max_duration=300.0,
+            min_sample_rate=16000,
         )
         self._profiles: dict[str, VoiceProfile] = {}
         self._load_existing_profiles()
@@ -62,6 +69,8 @@ class VoiceCloneService:
                     try:
                         with open(meta_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
+                        prompt_path = voice_dir / "prompt.pt"
+                        data["has_prompt"] = prompt_path.exists()
                         profile = VoiceProfile(**data)
                         self._profiles[profile.id] = profile
                     except Exception as e:
@@ -73,147 +82,201 @@ class VoiceCloneService:
         filename: str,
         name: str,
         language: str = "en",
+        ref_text: Optional[str] = None,
     ) -> tuple[VoiceProfile, AudioAnalysis]:
         """
         Upload and process a voice sample.
-        Returns the created profile and analysis results.
+        Converts any format (including .m4a) to 24kHz mono WAV, validates quality,
+        and saves profile immediately without blocking or file locks.
         """
-        # Validate file extension
+        supported = [".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac", ".wma", ".mp4", ".opus"]
         ext = Path(filename).suffix.lower()
-        if ext not in self._config.voices.supported_formats:
+        if ext not in supported:
             raise ValueError(
-                f"Unsupported format '{ext}'. "
-                f"Supported: {', '.join(self._config.voices.supported_formats)}"
+                f"Unsupported audio format '{ext}'. Supported formats: {', '.join(supported)}"
             )
 
-        # Check file size
+        # Check file size (max 50MB)
         size_mb = len(file_data) / (1024 * 1024)
-        if size_mb > self._config.voices.max_upload_size_mb:
-            raise ValueError(
-                f"File too large ({size_mb:.1f} MB). "
-                f"Maximum: {self._config.voices.max_upload_size_mb} MB."
-            )
+        if size_mb > 50.0:
+            raise ValueError(f"File too large ({size_mb:.1f} MB). Maximum allowed is 50 MB.")
 
-        # Create voice directory
         voice_id = str(uuid.uuid4())[:8]
         voice_dir = self._voices_dir / voice_id
         voice_dir.mkdir(parents=True, exist_ok=True)
 
+        original_path = voice_dir / f"original{ext}"
+        sample_path = voice_dir / "sample.wav"
+
         try:
-            # Save original upload
-            original_path = voice_dir / f"original{ext}"
+            # 1. Save original file
             with open(original_path, "wb") as f:
                 f.write(file_data)
 
-            # Convert to WAV (standardized format for processing)
-            sample_path = voice_dir / "sample.wav"
-            self._convert_to_wav(original_path, sample_path)
+            # 2. Universal decoding to normalized 24kHz mono WAV
+            self._convert_to_wav_24k(original_path, sample_path)
 
-            # Validate and analyze
+            # 3. Analyze audio quality
             analysis = self._validator.analyze(sample_path)
 
-            # Create profile
+            # 4. Attempt prompt extraction if ref_text provided and model in memory
+            has_prompt = False
+            extracted_text = (ref_text or "").strip()
+
+            try:
+                from backend.services.tts_service import get_tts_service
+                tts = get_tts_service()
+                provider = tts.get_provider("omnivoice")
+                if provider and provider.is_loaded() and hasattr(provider, "extract_voice_clone_prompt"):
+                    prompt = provider.extract_voice_clone_prompt(
+                        sample_path,
+                        ref_text=extracted_text if extracted_text else None,
+                    )
+                    if prompt:
+                        prompt_path = voice_dir / "prompt.pt"
+                        prompt.save(str(prompt_path))
+                        has_prompt = True
+                        if hasattr(prompt, "ref_text") and prompt.ref_text:
+                            extracted_text = prompt.ref_text
+            except Exception as e:
+                logger.debug(f"Prompt pre-extraction skipped: {e}")
+
+            # 5. Create voice profile
             profile = VoiceProfile(
                 id=voice_id,
-                name=name,
+                name=name.strip(),
                 language=language,
                 duration_seconds=analysis.duration_seconds,
-                sample_rate=analysis.sample_rate,
+                sample_rate=24000,
                 quality=analysis.quality,
                 quality_score=analysis.quality_score,
                 created_at=datetime.now(timezone.utc).isoformat(),
+                file_format="wav",
+                has_prompt=has_prompt,
+                ref_text=extracted_text,
             )
 
-            # Save metadata
+            # 6. Save metadata
             meta_path = voice_dir / "metadata.json"
             with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(profile.to_dict(), f, indent=2)
+                json.dump(profile.to_dict(), f, indent=2, ensure_ascii=False)
 
             self._profiles[profile.id] = profile
-
-            logger.info(
-                f"Voice profile created: id={voice_id}, name='{name}', "
-                f"quality={analysis.quality}"
-            )
+            logger.info(f"Voice profile created successfully: id={voice_id}, name='{name}'")
 
             return profile, analysis
 
         except Exception as e:
-            # Clean up on failure
+            gc.collect()
             if voice_dir.exists():
-                shutil.rmtree(voice_dir)
-            raise
+                try:
+                    shutil.rmtree(voice_dir, ignore_errors=True)
+                except Exception:
+                    pass
+            logger.error(f"Voice upload failed: {e}")
+            raise ValueError(f"Could not process audio sample ({filename}): {e}")
 
-    def _convert_to_wav(self, input_path: Path, output_path: Path) -> None:
-        """Convert any supported audio format to WAV 16kHz mono."""
+    def _convert_to_wav_24k(self, input_path: Path, output_path: Path) -> None:
+        """
+        Universal converter to normalized 24kHz mono WAV.
+        Uses PyAV (handles M4A, AAC, MP3, FLAC, OGG, WebM, WAV, WMA) with fallbacks.
+        """
+        audio_array = None
+
+        # Method 1: PyAV (Universal decoder, works perfectly for .m4a and all formats)
+        try:
+            import av
+            container = av.open(str(input_path))
+            resampler = av.AudioResampler(format='fltp', layout='mono', rate=24000)
+            frames = []
+            for frame in container.decode(audio=0):
+                for r_frame in resampler.resample(frame):
+                    frames.append(r_frame.to_ndarray())
+            container.close()
+
+            if frames:
+                audio_array = np.concatenate(frames, axis=1)[0]
+        except Exception as e:
+            logger.debug(f"PyAV decode fallback: {e}")
+
+        # Method 2: Soundfile (WAV, FLAC, OGG, MP3)
+        if audio_array is None:
+            try:
+                data, in_sr = sf.read(str(input_path))
+                if data.ndim > 1:
+                    data = np.mean(data, axis=1)
+                if in_sr != 24000:
+                    import librosa
+                    data = librosa.resample(data.astype(np.float32), orig_sr=in_sr, target_sr=24000)
+                audio_array = data
+            except Exception:
+                pass
+
+        # Method 3: Librosa
+        if audio_array is None:
+            try:
+                import librosa
+                audio_array, _ = librosa.load(str(input_path), sr=24000, mono=True)
+            except Exception:
+                pass
+
+        if audio_array is None or len(audio_array) == 0:
+            raise RuntimeError(f"Unable to decode audio format from {input_path.name}")
+
+        # Trim silence
         try:
             import librosa
-            import soundfile as sf
+            trimmed, _ = librosa.effects.trim(audio_array, top_db=30)
+            if len(trimmed) > 0:
+                audio_array = trimmed
+        except Exception:
+            pass
 
-            # Load and convert
-            audio, sr = librosa.load(str(input_path), sr=16000, mono=True)
+        # Normalize peak
+        max_val = np.max(np.abs(audio_array))
+        if max_val > 0:
+            audio_array = audio_array / max_val * 0.95
 
-            # Normalize volume
-            max_val = max(abs(audio.max()), abs(audio.min()))
-            if max_val > 0:
-                audio = audio / max_val * 0.95  # Leave headroom
-
-            # Remove leading/trailing silence
-            trimmed, _ = librosa.effects.trim(audio, top_db=30)
-
-            # Save
-            sf.write(str(output_path), trimmed, 16000)
-
-        except Exception as e:
-            # Fallback: try pydub
-            try:
-                from pydub import AudioSegment
-
-                audio = AudioSegment.from_file(str(input_path))
-                audio = audio.set_channels(1).set_frame_rate(16000)
-                audio.export(str(output_path), format="wav")
-            except Exception as e2:
-                raise RuntimeError(
-                    f"Failed to convert audio: {e}. Fallback also failed: {e2}"
-                )
+        sf.write(str(output_path), audio_array.astype(np.float32), 24000)
 
     def get_all_profiles(self) -> list[VoiceProfile]:
-        """Get all voice profiles."""
         return list(self._profiles.values())
 
     def get_profile(self, voice_id: str) -> Optional[VoiceProfile]:
-        """Get a voice profile by ID."""
         return self._profiles.get(voice_id)
 
     def get_sample_path(self, voice_id: str) -> Optional[Path]:
-        """Get the path to a voice sample WAV file."""
         voice_dir = self._voices_dir / voice_id
         sample = voice_dir / "sample.wav"
         if sample.exists():
             return sample
         return None
 
+    def get_prompt_path(self, voice_id: str) -> Optional[Path]:
+        voice_dir = self._voices_dir / voice_id
+        prompt = voice_dir / "prompt.pt"
+        if prompt.exists():
+            return prompt
+        return None
+
     async def rename_voice(self, voice_id: str, new_name: str) -> Optional[VoiceProfile]:
-        """Rename a voice profile."""
         profile = self._profiles.get(voice_id)
         if profile is None:
             return None
 
         profile.name = new_name
-
-        # Update metadata on disk
         meta_path = self._voices_dir / voice_id / "metadata.json"
         with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(profile.to_dict(), f, indent=2)
+            json.dump(profile.to_dict(), f, indent=2, ensure_ascii=False)
 
         return profile
 
     async def delete_voice(self, voice_id: str) -> bool:
-        """Delete a voice profile and its files."""
+        gc.collect()
         voice_dir = self._voices_dir / voice_id
         if voice_dir.exists():
             try:
-                shutil.rmtree(voice_dir)
+                shutil.rmtree(voice_dir, ignore_errors=True)
                 self._profiles.pop(voice_id, None)
                 logger.info(f"Deleted voice profile: {voice_id}")
                 return True
@@ -224,7 +287,6 @@ class VoiceCloneService:
         return True
 
     def get_voice_count(self) -> int:
-        """Get the number of voice profiles."""
         return len(self._profiles)
 
 
@@ -233,7 +295,6 @@ _service: Optional[VoiceCloneService] = None
 
 
 def get_voice_clone_service() -> VoiceCloneService:
-    """Get the global VoiceCloneService singleton."""
     global _service
     if _service is None:
         _service = VoiceCloneService()

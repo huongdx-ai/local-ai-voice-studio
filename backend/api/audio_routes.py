@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 @router.get("/{output_id}")
 async def get_audio(
     output_id: str,
-    format: str = Query(default="wav", regex="^(wav|mp3)$"),
+    format: str = Query(default="wav", pattern="^(wav|mp3)$"),
 ):
     """Stream an audio file for playback."""
     service = get_audio_service()
@@ -35,7 +35,7 @@ async def get_audio(
 @router.get("/{output_id}/download")
 async def download_audio(
     output_id: str,
-    format: str = Query(default="wav", regex="^(wav|mp3)$"),
+    format: str = Query(default="wav", pattern="^(wav|mp3)$"),
 ):
     """Download an audio file."""
     service = get_audio_service()

@@ -1,6 +1,6 @@
 """
 TTS API routes for Local AI Voice Studio.
-Text-to-speech generation with background jobs and SSE progress.
+Text-to-speech generation with background jobs, Voice Cloning, Voice Design, and SSE progress.
 """
 
 import json
@@ -23,12 +23,17 @@ router = APIRouter(prefix="/api/tts", tags=["tts"])
 class TTSGenerateRequest(BaseModel):
     """Request body for TTS generation."""
     text: str = Field(..., min_length=1, max_length=5000)
-    language: str = Field(default="en", pattern="^(en|vi|ja)$")
+    language: str = Field(default="en")
     voice_id: Optional[str] = None
+    instruct: Optional[str] = None          # Voice design prompt (e.g. "warm calm female voice")
     engine_id: Optional[str] = None
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     pitch: float = Field(default=0.0, ge=-12.0, le=12.0)
     volume: float = Field(default=1.0, ge=0.0, le=1.0)
+    num_step: int = Field(default=32, ge=16, le=64)
+    guidance_scale: float = Field(default=2.0, ge=1.0, le=5.0)
+    denoise: bool = Field(default=True)
+    duration: Optional[float] = None
     output_format: str = Field(default="wav", pattern="^(wav|mp3)$")
 
 
@@ -63,34 +68,53 @@ async def _run_generation(job_id: str, request: TTSGenerateRequest):
     try:
         # Stage 1: Validate input
         await job_manager.update_progress(
-            job_id, 0.05, "Preparing", "Validating input..."
+            job_id, 0.05, "Preparing", "Validating input parameters..."
         )
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
 
-        # Stage 2: Determine voice profile
+        # Stage 2: Determine voice profile & clone prompt
         voice_profile_path = None
+        voice_prompt_path = None
+        ref_text = None
         voice_name = "default"
+
         if request.voice_id:
-            sample_path = voice_service.get_sample_path(request.voice_id)
-            if sample_path:
-                voice_profile_path = sample_path
-                profile = voice_service.get_profile(request.voice_id)
-                voice_name = profile.name if profile else request.voice_id
+            profile = voice_service.get_profile(request.voice_id)
+            if profile:
+                voice_name = profile.name
+                ref_text = profile.ref_text or None
+            
+            # Check pre-extracted prompt (.pt) first
+            prompt_p = voice_service.get_prompt_path(request.voice_id)
+            if prompt_p:
+                voice_prompt_path = prompt_p
+            
+            # Reference sample (.wav)
+            sample_p = voice_service.get_sample_path(request.voice_id)
+            if sample_p:
+                voice_profile_path = sample_p
 
         await job_manager.update_progress(
-            job_id, 0.10, "Loading model", "Selecting and loading TTS model..."
+            job_id, 0.15, "Loading model", "Ensuring OmniVoice model is ready..."
         )
 
-        # Stage 3: Generate speech
+        # Stage 3: Synthesize audio
         await job_manager.update_progress(
-            job_id, 0.30, "Generating speech", "Synthesizing audio..."
+            job_id, 0.35, "Synthesizing", "Generating audio via diffusion model..."
         )
 
         tts_request = TTSRequest(
             text=request.text,
             language=request.language,
-            speed=request.speed if request.pitch == 0.0 else 1.0,  # speed handled in post-processing if pitch also changes
+            speed=request.speed if request.pitch == 0.0 else 1.0,
             voice_profile_path=voice_profile_path,
+            voice_prompt_path=voice_prompt_path,
+            ref_text=ref_text,
+            instruct=request.instruct,
+            num_step=request.num_step,
+            guidance_scale=request.guidance_scale,
+            denoise=request.denoise,
+            duration=request.duration,
             output_format=request.output_format,
         )
 
@@ -104,7 +128,7 @@ async def _run_generation(job_id: str, request: TTSGenerateRequest):
             return
 
         await job_manager.update_progress(
-            job_id, 0.70, "Processing audio", "Applying post-processing..."
+            job_id, 0.75, "Post-processing", "Applying volume, pitch, and format encoding..."
         )
 
         # Stage 4: Post-process and save
@@ -121,10 +145,10 @@ async def _run_generation(job_id: str, request: TTSGenerateRequest):
         )
 
         await job_manager.update_progress(
-            job_id, 0.90, "Converting", "Finalizing output..."
+            job_id, 0.95, "Finalizing", "Preparing audio URLs..."
         )
 
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
 
         # Complete
         await job_manager.complete_job(job_id, {

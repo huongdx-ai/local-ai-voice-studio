@@ -41,6 +41,14 @@ async def get_stats():
     }
 
 
+@router.delete("")
+async def clear_all_history():
+    """Delete all generation history and audio files."""
+    service = get_audio_service()
+    count = await service.delete_all_outputs()
+    return {"message": f"Deleted {count} history entries", "count": count}
+
+
 @router.delete("/{output_id}")
 async def delete_history_entry(output_id: str):
     """Delete a history entry and its audio files."""

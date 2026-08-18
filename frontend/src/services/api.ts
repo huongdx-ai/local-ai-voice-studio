@@ -88,12 +88,16 @@ export async function getVoices(): Promise<VoiceProfile[]> {
 export async function uploadVoice(
   file: File,
   name: string,
-  language: string
+  language: string,
+  refText?: string,
 ): Promise<{ profile: VoiceProfile; analysis: AudioAnalysis }> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('name', name);
   formData.append('language', language);
+  if (refText) {
+    formData.append('ref_text', refText);
+  }
 
   const res = await fetch(`${API_BASE}/api/voices`, {
     method: 'POST',
@@ -163,6 +167,10 @@ export async function getHistoryStats(): Promise<HistoryStats> {
 
 export async function deleteHistory(outputId: string): Promise<void> {
   await fetchJSON(`/api/history/${outputId}`, { method: 'DELETE' });
+}
+
+export async function clearAllHistory(): Promise<{ message: string; count: number }> {
+  return fetchJSON<{ message: string; count: number }>('/api/history', { method: 'DELETE' });
 }
 
 // ── Audio ──
