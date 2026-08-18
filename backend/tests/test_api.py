@@ -39,13 +39,13 @@ class TestModelsAPI:
         assert response.status_code == 200
         data = response.json()
         assert "models" in data
-        assert len(data["models"]) >= 4
+        assert len(data["models"]) >= 1
 
     def test_get_model(self, client):
-        response = client.get("/api/models/chatterbox-multilingual-v3")
+        response = client.get("/api/models/omnivoice-multilingual")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == "chatterbox-multilingual-v3"
+        assert data["id"] == "omnivoice-multilingual"
 
     def test_get_model_not_found(self, client):
         response = client.get("/api/models/nonexistent")

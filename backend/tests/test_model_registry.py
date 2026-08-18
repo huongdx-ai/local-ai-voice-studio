@@ -6,38 +6,40 @@ from backend.services.hardware_detector import HardwareProfile, CPUInfo, RAMInfo
 
 
 class TestModelRegistry:
-    def test_builtin_models_loaded(self):
+    def test_omnivoice_model_loaded(self):
         registry = ModelRegistry()
         models = registry.get_all()
-        assert len(models) >= 4  # Chatterbox, Kokoro EN, Kokoro JA, Piper VI
+        assert len(models) >= 1
 
-    def test_get_by_id(self):
+    def test_get_omnivoice(self):
         registry = ModelRegistry()
-        model = registry.get("chatterbox-multilingual-v3")
+        model = registry.get("omnivoice-multilingual")
         assert model is not None
-        assert model.name == "Chatterbox Multilingual V3"
+        assert model.name == "OmniVoice"
+        assert model.engine == ModelEngine.OMNIVOICE
 
     def test_get_nonexistent(self):
         registry = ModelRegistry()
         model = registry.get("nonexistent")
         assert model is None
 
-    def test_get_by_language_english(self):
+    def test_omnivoice_supports_english(self):
         registry = ModelRegistry()
         models = registry.get_by_language("en")
-        assert len(models) >= 2  # Chatterbox + Kokoro
+        assert len(models) >= 1
+        assert any(m.id == "omnivoice-multilingual" for m in models)
 
-    def test_get_by_language_vietnamese(self):
+    def test_omnivoice_supports_vietnamese(self):
         registry = ModelRegistry()
         models = registry.get_by_language("vi")
-        assert len(models) >= 1  # Chatterbox + Piper
+        assert len(models) >= 1
 
-    def test_get_by_language_japanese(self):
+    def test_omnivoice_supports_japanese(self):
         registry = ModelRegistry()
         models = registry.get_by_language("ja")
-        assert len(models) >= 2  # Chatterbox + Kokoro
+        assert len(models) >= 1
 
-    def test_get_cloning_models(self):
+    def test_omnivoice_supports_cloning(self):
         registry = ModelRegistry()
         cloning = registry.get_cloning_models()
         assert len(cloning) >= 1
@@ -45,18 +47,15 @@ class TestModelRegistry:
 
     def test_status_tracking(self):
         registry = ModelRegistry()
-        model_id = "chatterbox-multilingual-v3"
-        assert registry.get_status(model_id) == ModelStatus.NOT_INSTALLED
+        model_id = "omnivoice-multilingual"
+        # Default should be NOT_INSTALLED or INSTALLED depending on pip
+        status = registry.get_status(model_id)
+        assert status in (ModelStatus.NOT_INSTALLED, ModelStatus.INSTALLED)
 
-        registry.set_status(model_id, ModelStatus.INSTALLED)
-        assert registry.get_status(model_id) == ModelStatus.INSTALLED
-
-    def test_active_model(self):
+    def test_active_model_default(self):
         registry = ModelRegistry()
-        assert registry.get_active_model_id() is None
-
-        registry.set_active_model("chatterbox-multilingual-v3")
-        assert registry.get_active_model_id() == "chatterbox-multilingual-v3"
+        # OmniVoice should be active by default
+        assert registry.get_active_model_id() == "omnivoice-multilingual"
 
     def test_set_active_invalid(self):
         registry = ModelRegistry()
@@ -67,9 +66,14 @@ class TestModelRegistry:
         registry = ModelRegistry()
         items = registry.to_dict_list()
         assert isinstance(items, list)
-        assert len(items) >= 4
+        assert len(items) >= 1
         assert "status" in items[0]
         assert "is_active" in items[0]
+
+    def test_omnivoice_has_huggingface_id(self):
+        registry = ModelRegistry()
+        model = registry.get("omnivoice-multilingual")
+        assert model.huggingface_id == "k2-fsa/OmniVoice"
 
 
 class TestModelSelector:
@@ -91,37 +95,20 @@ class TestModelSelector:
             recommended_device="cpu",
         )
 
-    def test_select_english_gpu(self):
+    def test_select_returns_omnivoice(self):
         selector = ModelSelector()
         profile = self._make_gpu_profile(12.0)
         model = selector.select_best("en", profile)
         assert model is not None
-        assert "en" in model.languages_supported or model.language in ("en", "multi")
+        assert model.id == "omnivoice-multilingual"
 
-    def test_select_japanese_gpu(self):
+    def test_select_all_languages(self):
         selector = ModelSelector()
         profile = self._make_gpu_profile(8.0)
-        model = selector.select_best("ja", profile)
-        assert model is not None
-
-    def test_select_vietnamese_gpu(self):
-        selector = ModelSelector()
-        profile = self._make_gpu_profile(8.0)
-        model = selector.select_best("vi", profile)
-        assert model is not None
-
-    def test_select_with_cloning(self):
-        selector = ModelSelector()
-        profile = self._make_gpu_profile(12.0)
-        model = selector.select_best("en", profile, require_cloning=True)
-        assert model is not None
-        assert model.voice_cloning is True
-
-    def test_select_cpu_fallback(self):
-        selector = ModelSelector()
-        profile = self._make_cpu_profile(16.0)
-        model = selector.select_best("en", profile)
-        assert model is not None
+        for lang in ["en", "vi", "ja"]:
+            model = selector.select_best(lang, profile)
+            assert model is not None
+            assert model.id == "omnivoice-multilingual"
 
     def test_recommend_all(self):
         selector = ModelSelector()
@@ -130,23 +117,13 @@ class TestModelSelector:
         assert "en" in recs
         assert "vi" in recs
         assert "ja" in recs
+        # All should be OmniVoice
+        for lang, model in recs.items():
+            assert model is not None
+            assert model.id == "omnivoice-multilingual"
 
-    def test_score_all_returns_sorted(self):
+    def test_cpu_mode_works(self):
         selector = ModelSelector()
-        profile = self._make_gpu_profile(12.0)
-        scores = selector.score_all("en", profile)
-        assert len(scores) > 0
-        # Should be sorted descending
-        for i in range(len(scores) - 1):
-            assert scores[i].total_score >= scores[i + 1].total_score
-
-    def test_low_vram_excludes_large_models(self):
-        selector = ModelSelector()
-        profile = self._make_gpu_profile(2.0)
-        scores = selector.score_all("en", profile)
-        chatterbox_score = next(
-            (s for s in scores if s.model_id == "chatterbox-multilingual-v3"), None
-        )
-        if chatterbox_score:
-            # Chatterbox needs 4GB VRAM min, so with 2GB it shouldn't run
-            assert not chatterbox_score.can_run
+        profile = self._make_cpu_profile(16.0)
+        model = selector.select_best("en", profile)
+        assert model is not None

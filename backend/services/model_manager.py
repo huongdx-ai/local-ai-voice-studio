@@ -1,6 +1,7 @@
 """
 Model Manager for Local AI Voice Studio.
 Handles model installation, download with progress, caching, and lifecycle.
+Simplified for OmniVoice as the single TTS engine.
 """
 
 import os
@@ -46,7 +47,6 @@ class ModelManager:
         self._config = get_config()
         self._cache_dir = get_project_root() / self._config.models.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._loaded_engines: dict[str, object] = {}
 
         # Scan cache to update registry status
         self._scan_cache()
@@ -60,14 +60,10 @@ class ModelManager:
                 self._registry.set_status(model.id, ModelStatus.INSTALLED)
                 logger.debug(f"Found cached model: {model.id}")
 
-        # Also check if pip packages are importable
+        # Check if omnivoice pip package is importable
         for model in self._registry.get_all():
-            if (
-                self._registry.get_status(model.id) == ModelStatus.NOT_INSTALLED
-                and model.pip_package
-            ):
-                if self._check_pip_package(model):
-                    # For pip-based models, mark as installed if package exists
+            if self._registry.get_status(model.id) == ModelStatus.NOT_INSTALLED:
+                if self._check_omnivoice_installed():
                     model_dir = self._cache_dir / model.id
                     model_dir.mkdir(parents=True, exist_ok=True)
                     marker = model_dir / ".installed"
@@ -77,12 +73,12 @@ class ModelManager:
                         "install_type": "pip",
                     }))
                     self._registry.set_status(model.id, ModelStatus.INSTALLED)
+                    logger.info(f"OmniVoice package detected as installed")
 
-    def _check_pip_package(self, model: ModelInfo) -> bool:
-        """Check if a model's pip package is importable."""
+    def _check_omnivoice_installed(self) -> bool:
+        """Check if omnivoice pip package is importable."""
         try:
-            pkg_name = model.pip_package.replace("-", "_")
-            importlib.import_module(pkg_name)
+            importlib.import_module("omnivoice")
             return True
         except ImportError:
             return False
@@ -100,8 +96,7 @@ class ModelManager:
     ) -> AsyncGenerator[DownloadProgress, None]:
         """
         Install a model. Yields progress updates.
-        For pip-based models, this checks the package is available.
-        For repo-based models, downloads weights from HuggingFace.
+        For OmniVoice, checks the pip package and triggers first model load.
         """
         model = self._registry.get(model_id)
         if model is None:
@@ -135,54 +130,73 @@ class ModelManager:
             model_dir = self._cache_dir / model_id
             model_dir.mkdir(parents=True, exist_ok=True)
 
-            # Step 1: Check/install pip package
-            if model.pip_package:
+            # Step 1: Check if omnivoice pip package is available
+            yield DownloadProgress(
+                model_id=model_id,
+                status="downloading",
+                progress=0.1,
+                message="Checking omnivoice package...",
+            )
+
+            if not self._check_omnivoice_installed():
                 yield DownloadProgress(
                     model_id=model_id,
                     status="downloading",
-                    progress=0.1,
-                    message=f"Checking package '{model.pip_package}'...",
+                    progress=0.2,
+                    message="Installing omnivoice package via pip...",
                 )
 
-                if not self._check_pip_package(model):
+                # Try to install omnivoice
+                try:
+                    import subprocess
+                    import sys
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "omnivoice"],
+                            capture_output=True, text=True, timeout=600,
+                        )
+                    )
+                    if result.returncode != 0:
+                        yield DownloadProgress(
+                            model_id=model_id,
+                            status="error",
+                            progress=0.0,
+                            message=f"Failed to install omnivoice: {result.stderr[:200]}",
+                        )
+                        self._registry.set_status(model_id, ModelStatus.ERROR)
+                        return
+                except Exception as e:
                     yield DownloadProgress(
                         model_id=model_id,
-                        status="downloading",
-                        progress=0.2,
-                        message=f"Package '{model.pip_package}' not found. Please install it via pip.",
+                        status="error",
+                        progress=0.0,
+                        message=f"pip install failed: {str(e)}",
                     )
-                    # We don't auto-pip-install at runtime for safety
-                    # The install.bat handles this
-                else:
-                    yield DownloadProgress(
-                        model_id=model_id,
-                        status="downloading",
-                        progress=0.3,
-                        message=f"Package '{model.pip_package}' is available.",
-                    )
+                    self._registry.set_status(model_id, ModelStatus.ERROR)
+                    return
 
-            # Step 2: Download model weights if needed
-            if model.model_repo:
-                yield DownloadProgress(
-                    model_id=model_id,
-                    status="downloading",
-                    progress=0.3,
-                    message=f"Downloading model weights from {model.model_repo}...",
-                )
+            yield DownloadProgress(
+                model_id=model_id,
+                status="downloading",
+                progress=0.4,
+                message="OmniVoice package available. Downloading model weights on first use...",
+            )
 
-                async for progress in self._download_from_hub(model, model_dir):
-                    yield progress
-            else:
-                # pip-only models: trigger first load to download weights
-                yield DownloadProgress(
-                    model_id=model_id,
-                    status="downloading",
-                    progress=0.5,
-                    message="Initializing model (downloading weights on first use)...",
-                )
-                # The actual weight download happens at first inference
-                # We just verify the package is available
-                await asyncio.sleep(0.5)
+            # Step 2: Trigger model weight download by importing
+            yield DownloadProgress(
+                model_id=model_id,
+                status="downloading",
+                progress=0.6,
+                message="Initializing OmniVoice model (downloading weights)...",
+            )
+
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._trigger_model_download)
+            except Exception as e:
+                logger.warning(f"Model pre-download warning: {e}")
+                # Don't fail — model will download on first inference
 
             # Step 3: Mark as installed
             yield DownloadProgress(
@@ -196,7 +210,7 @@ class ModelManager:
             marker.write_text(json.dumps({
                 "model_id": model.id,
                 "engine": model.engine.value,
-                "install_type": "pip" if model.pip_package else "repo",
+                "install_type": "pip",
             }))
 
             self._registry.set_status(model_id, ModelStatus.INSTALLED)
@@ -218,52 +232,14 @@ class ModelManager:
                 message=f"Installation failed: {str(e)}",
             )
 
-    async def _download_from_hub(
-        self, model: ModelInfo, model_dir: Path
-    ) -> AsyncGenerator[DownloadProgress, None]:
-        """Download model weights from HuggingFace Hub."""
+    def _trigger_model_download(self) -> None:
+        """Trigger OmniVoice model weight download by initializing."""
         try:
-            from huggingface_hub import snapshot_download
-
-            def _do_download():
-                return snapshot_download(
-                    repo_id=model.model_repo,
-                    local_dir=str(model_dir / "weights"),
-                    local_dir_use_symlinks=False,
-                )
-
-            yield DownloadProgress(
-                model_id=model.id,
-                status="downloading",
-                progress=0.4,
-                message="Downloading from HuggingFace Hub...",
-            )
-
-            # Run blocking download in executor
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _do_download)
-
-            yield DownloadProgress(
-                model_id=model.id,
-                status="downloading",
-                progress=0.85,
-                message="Download complete, finalizing...",
-            )
-
-        except ImportError:
-            yield DownloadProgress(
-                model_id=model.id,
-                status="error",
-                progress=0.0,
-                message="huggingface_hub not installed. Run: pip install huggingface-hub",
-            )
+            from omnivoice import OmniVoice
+            model = OmniVoice.from_pretrained("k2-fsa/OmniVoice")
+            del model
         except Exception as e:
-            yield DownloadProgress(
-                model_id=model.id,
-                status="error",
-                progress=0.0,
-                message=f"Download failed: {str(e)}",
-            )
+            logger.warning(f"Model pre-download: {e}")
 
     async def delete_model(self, model_id: str) -> bool:
         """Delete a model's cached files."""

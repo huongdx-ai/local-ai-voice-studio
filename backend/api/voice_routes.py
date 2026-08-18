@@ -28,9 +28,10 @@ async def upload_voice(
     file: UploadFile = File(...),
     name: str = Form(...),
     language: str = Form("en"),
+    ref_text: Optional[str] = Form(None),
 ):
     """
-    Upload a voice sample and create a voice profile.
+    Upload a voice sample and create a voice profile with VoiceClonePrompt extraction.
     """
     service = get_voice_clone_service()
 
@@ -41,6 +42,7 @@ async def upload_voice(
             filename=file.filename or "upload.wav",
             name=name,
             language=language,
+            ref_text=ref_text,
         )
 
         return {

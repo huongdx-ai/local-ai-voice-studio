@@ -2,11 +2,22 @@
 
 // ── System / Hardware ──
 export interface SystemInfo {
-  cpu: { name: string; cores_physical: number; cores_logical: number; architecture: string };
-  ram: { total_gb: number; available_gb: number; used_percent: number };
-  gpu: { name: string; vendor: string; vram_total_gb: number; vram_available_gb: number; detected: boolean };
-  cuda: { available: boolean; version: string; cudnn_version: string; compute_capability: string };
-  disk: { total_gb: number; free_gb: number };
+  cpu: { name: string; cores_physical: number; cores_logical: number; architecture: string; usage_percent?: number };
+  ram: { total_gb: number; available_gb: number; used_gb?: number; used_percent: number };
+  gpu: {
+    name: string;
+    vendor: string;
+    vram_total_gb: number;
+    vram_free_gb: number;
+    vram_used_gb?: number;
+    vram_used_percent?: number;
+    gpu_utilization_percent?: number;
+    temperature_c?: number;
+    driver_version?: string;
+    detected: boolean;
+  };
+  cuda: { available: boolean; version: string; cudnn_version: string; compute_capability: string; device_count?: number };
+  disk: { total_gb: number; free_gb: number; used_gb?: number; used_percent?: number };
   python_version: string;
   pytorch_version: string;
   os: { name: string; version: string };
@@ -47,6 +58,8 @@ export interface VoiceProfile {
   quality: string;
   quality_score: number;
   created_at: string;
+  has_prompt?: boolean;
+  ref_text?: string;
 }
 
 export interface AudioAnalysis {
@@ -70,10 +83,15 @@ export interface TTSRequest {
   text: string;
   language: string;
   voice_id?: string;
+  instruct?: string;
   engine_id?: string;
   speed: number;
   pitch: number;
   volume: number;
+  num_step?: number;
+  guidance_scale?: number;
+  denoise?: boolean;
+  duration?: number;
   output_format: string;
 }
 

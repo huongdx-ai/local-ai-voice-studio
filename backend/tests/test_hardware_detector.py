@@ -15,6 +15,7 @@ class TestHardwareDetector:
         assert profile.cpu.cores_logical > 0
         assert profile.cpu.cores_physical > 0
         assert profile.cpu.name != ""
+        assert profile.cpu.name != "Unknown"
 
     def test_ram_detection(self):
         detector = HardwareDetector()
@@ -74,3 +75,12 @@ class TestHardwareDetector:
         p1 = detector.detect()
         p2 = detector.get_profile()
         assert p1 is p2
+
+    def test_gpu_info_structure(self):
+        detector = HardwareDetector()
+        profile = detector.detect()
+        # GPU fields should always be present
+        assert hasattr(profile.gpu, 'detected')
+        assert hasattr(profile.gpu, 'name')
+        assert hasattr(profile.gpu, 'vram_total_gb')
+        assert isinstance(profile.gpu.detected, bool)

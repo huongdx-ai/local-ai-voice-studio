@@ -31,7 +31,7 @@ models:
     cpu_model_min_ram: 8
 
 audio:
-  sample_rate: 22050
+  sample_rate: 24000
   output_dir: outputs
   supported_formats:
     - wav

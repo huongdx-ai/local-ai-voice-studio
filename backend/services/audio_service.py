@@ -247,13 +247,27 @@ class AudioService:
         out_dir = self._output_dir / output_id
         if out_dir.exists():
             try:
-                shutil.rmtree(out_dir)
+                shutil.rmtree(out_dir, ignore_errors=True)
             except Exception as e:
                 logger.error(f"Failed to delete output {output_id}: {e}")
                 return False
 
         self._outputs.pop(output_id, None)
         return True
+
+    async def delete_all_outputs(self) -> int:
+        """Delete all outputs and clear history."""
+        import shutil
+        count = len(self._outputs)
+        for out_id in list(self._outputs.keys()):
+            out_dir = self._output_dir / out_id
+            if out_dir.exists():
+                try:
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                except Exception as e:
+                    logger.error(f"Failed to delete output {out_id}: {e}")
+        self._outputs.clear()
+        return count
 
     def get_total_duration(self) -> float:
         """Get total duration of all generated audio in seconds."""
